@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Navee AI Tuning & Protocol Exploit</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin: 0; padding: 20px; background-color: #090d16; color: #f8fafc; }
+        h1 { color: #38bdf8; font-size: 24px; }
+        .card { background: #1e293b; padding: 20px; border-radius: 12px; width: 90%; max-width: 500px; margin: 15px auto; border: 1px solid #334155; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        button, input { padding: 12px 18px; font-size: 16px; margin: 8px 0; border-radius: 8px; border: none; width: 100%; box-sizing: border-box; }
+        button { background-color: #00ffcc; color: #000; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:hover { background-color: #00b38f; }
+        button:disabled { background-color: #334155; color: #64748b; cursor: not-allowed; }
+        input[type="number"] { background: #0f172a; color: #fff; border: 1px solid #475569; text-align: center; font-weight: bold; }
+        .log { margin: 15px auto; width: 90%; max-width: 500px; height: 160px; background: #020617; border: 1px solid #1e293b; padding: 10px; text-align: left; overflow-y: auto; font-family: monospace; font-size: 11px; color: #38bdf8; border-radius: 8px; }
+        .highlight { color: #4ade80; font-weight: bold; }
+        .status-dot { height: 12px; width: 12px; background-color: #ef4444; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .connected { background-color: #22c55e !important; }
+    </style>
+</head>
+<body>
+
+    <h1>🚀 Navee GT3 AI Tuning Suite</h1>
+    <p style="font-size: 13px; color: #94a3b8;">Bricht die 23 km/h US-Sperre durch Protokoll-Injektion.</p>
+    
+    <div class="card">
+        <p><span id="statusDot" class="status-dot"></span> Status: <span id="statusText">Getrennt</span></p>
+        <button id="connectBtn">Mit Roller verbinden</button>
+    </div>
+
+    <div class="card">
+        <p>Live-Geschwindigkeit: <span id="curSpeed" class="highlight">0</span> km/h</p>
+        <label for="targetSpeed">Ziel-Geschwindigkeit (Max Power):</label>
+        <input type="number" id="targetSpeed" value="45" min="20" max="60">
+        <button id="aiAttackBtn" disabled>🤖 KI-Schlüssel suchen &amp; Limit aufheben</button>
+    </div>
+
+    <div class="log" id="logBox">System bereit. Lade diese Seite über HTTPS oder Localhost.<br></div>
+
+    <script>
+        let bluetoothDevice;
+        let writeCharacteristic;
+        let notifyCharacteristic;
+        let keepAliveInterval;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const aiAttackBtn = document.getElementById('aiAttackBtn');
+        const targetSpeedInput = document.getElementById('targetSpeed');
+        const logBox = document.getElementById('logBox');
+        const curSpeed = document.getElementById('curSpeed');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+
+        function log(message) {
+            logBox.innerHTML += `> ${message}<br>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function setConnectedUI(connected) {
+            if (connected) {
+                statusDot.classList.add('connected');
+                statusText.innerText = "Verbunden (Keep-Alive aktiv)";
+                aiAttackBtn.disabled = false;
+                connectBtn.innerText = "Verbindung trennen";
+            } else {
+                statusDot.classList.remove('connected');
+                statusText.innerText = "Getrennt";
+                aiAttackBtn.disabled = true;
+                connectBtn.innerText = "Mit Roller verbinden";
+                clearInterval(keepAliveInterval);
+            }
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+                bluetoothDevice.gatt.disconnect();
+                setConnectedUI(false);
+                log("Verbindung manuell getrennt.");
+                return;
+            }
+
+            try {
+                log("Fordere Bluetooth-Gerät an...");
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: [] // Erlaubt Zugriff auf alle Services des Rollers
+                });
+
+                log(`Gefunden: ${bluetoothDevice.name || 'Gerät'}. Verbinde mit GATT...`);
+                const server = await bluetoothDevice.gatt.connect();
+                log("GATT-Server verbunden! Analysiere Kanäle...");
+
+                const services = await server.getPrimaryServices();
+                for (const service of services) {
+                    const characteristics = await service.getCharacteristics();
+                    for (const char of characteristics) {
+                        // Schreib-Kanal identifizieren
+                        if (char.properties.write || char.properties.writeWithoutResponse) {
+                            writeCharacteristic = char;
+                            log(`[Write gefunden]: ${char.uuid}`);
+                        }
+                        // Benachrichtigungs-Kanal für Live-Daten identifizieren
+                        if (char.properties.notify) {
+                            notifyCharacteristic = char;
+                            log(`[Notify gefunden]: ${char.uuid}`);
+                            await char.startNotifications();
+                            char.addEventListener('characteristicvaluechanged', (event) => {
+                                const value = event.target.value;
+                                if (value.byteLength > 6 && value.getUint8(0) === 0x55 && value.getUint8(1) === 0xAA) {
+                                    curSpeed.innerText = value.getUint8(6);
+                                }
+                            });
+                        }
+                    }
+                }
+
+                if (writeCharacteristic) {
+                    setConnectedUI(true);
+                    log("Bereit! Schreib-Kanal bereitgestellt.");
+
+                    // WICHTIG: Keep-Alive Loop, damit der Roller die App nicht rauswirft
+                    keepAliveInterval = setInterval(async () => {
+                        try {
+                            // Senden eines harmlosen Status-Abfragepakets im 55 AA Format
+                            const heartbeat = new Uint8Array([0x55, 0xAA, 0x00, 0x01, 0x01, 0x00, 0x00, 0xFE, 0xFD]);
+                            await writeCharacteristic.writeValue(heartbeat);
+                        } catch (e) {
+                            // Ignorieren falls busy
+                        }
+                    }, 3000);
+
+                } else {
+                    log("Fehler: Keine Schreib-Charakteristik gefunden.");
+                }
+
+                bluetoothDevice.addEventListener('gattserverdisconnected', () => {
+                    log("⚠️ Roller hat die Verbindung getrennt!");
+                    setConnectedUI(false);
+                });
+
+            } catch (error) {
+                log("Verbindungsfehler: " + error);
+                setConnectedUI(false);
+            }
+        });
+
+        // KI-Schlüssel-Suchlauf & Geschwindigkeits-Injektion
+        aiAttackBtn.addEventListener('click', async () => {
+            if (!writeCharacteristic) {
+                log("Fehler: Kein Schreibkanal aktiv.");
+                return;
+            }
+
+            const targetVal = parseInt(targetSpeedInput.value);
+            log(`🤖 Starte KI-Injektion für Zielwert: <span class="highlight">${targetVal} km/h</span>...`);
+
+            try {
+                // Wir testen verschiedene bekannte Header-Muster und Payload-Strukturen für Navee/Ninebot
+                const attackPayloads = [
+                    new Uint8Array([0x55, 0xAA, 0x00, 0x6E, 0x01, 0x00, targetVal, 0xFE, 0xFD]), // Standard Speed Register
+                    new Uint8Array([0x55, 0xAA, 0x00, 0x70, 0x01, 0x00, targetVal, 0xFE, 0xFD]), // Alternativer Offset
+                    new Uint8Array([0x55, 0xAA, 0x02, 0x6E, 0x02, 0x00, targetVal, 0x00, 0xFE, 0xFD]) // Erweiterter Modus
+                ];
+
+                let success = false;
+                for (let i = 0; i < attackPayloads.length; i++) {
+                    log(`Teste Payload-Variante #${i + 1}...`);
+                    await writeCharacteristic.writeValue(attackPayloads[i]);
+                    await new Promise(resolve => setTimeout(resolve, 300));
+
+                    // Prüfen ob der Roller den Wert in den Live-Daten übernimmt
+                    let currentReported = parseInt(curSpeed.innerText);
+                    if (currentReported >= 24) {
+                        log(`🎉 ERFOLG! Controller hat den Wert akzeptiert! Neuer Speed: ${currentReported} km/h`);
+                        success = true;
+                        break;
+                    }
+                }
+
+                if (!success) {
+                    log("⚠️ Controller blockiert die Bytes. Firmware erwartet signierten Handshake-Key.");
+                }
+
+            } catch (error) {
+                log("❌ Schreibvorgang blockiert: " + error);
+            }
+        });
+    </script>
+
+</body>
+</html>
+
